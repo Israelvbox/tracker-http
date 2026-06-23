@@ -117,7 +117,7 @@ curl -I http://localhost/
 
   ## Preview
   **Pagina de inicio**
-  <img href="https://github.com/Israelvbox/tracker-http/blob/main/images/main.png?raw=true">
+  <img src="https://github.com/Israelvbox/tracker-http/blob/main/images/main.png?raw=true">
 
   **Panel de administrador**
-  <img href="https://github.com/Israelvbox/tracker-http/blob/main/images/admin.png?raw=true">
+  <img src="https://github.com/Israelvbox/tracker-http/blob/main/images/admin.png?raw=true">
