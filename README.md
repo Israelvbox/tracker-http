@@ -114,3 +114,10 @@ curl -I http://localhost/
 - **Sesiones en memoria**: se pierden al reiniciar el servicio (los
   usuarios tendrán que volver a iniciar sesión). Los datos persistentes
   (usuarios, torrents, reportes) están en Postgres.
+
+  ## Preview
+  **Pagina de inicio**
+  <img href="https://github.com/Israelvbox/tracker-http/blob/main/images/main.png?raw=true">
+
+  **Panel de administrador**
+  <img href="https://github.com/Israelvbox/tracker-http/blob/main/images/admin.png?raw=true">
