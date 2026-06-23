@@ -1,4 +1,4 @@
-# Treacker-http
+# Tracker-http
 
 Un tracker BitTorrent HTTP completo (protocolo, bencode y formato compacto de
 peers implementados desde cero en Go, sin librerías de BitTorrent de
