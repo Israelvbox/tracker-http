@@ -86,10 +86,13 @@ sudo systemctl restart tracker
 ## Estructura del proyecto
 
 ```
-main.go, db.go, reports.go, bencode.go, password.go   → backend Go
-schema.sql                                              → referencia del esquema SQL
-public/                                                 → frontend (HTML/CSS/JS)
-install.sh                                              → instalador interactivo
+main.go, db.go, reports.go, bencode.go, password.go         → backend Go
+
+schema.sql                                                  → referencia del esquema SQL
+
+public/                                                     → frontend (HTML/CSS/JS)
+
+install.sh                                                  → instalador interactivo
 ```
 
 ## Comandos de diagnóstico
