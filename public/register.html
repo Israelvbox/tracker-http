@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>registrarse — __SITE_NAME__</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <header class="site-header">
+    <div class="logo"><a href="/" style="color:inherit">__SITE_NAME__</a></div>
+    <nav class="nav" id="nav-slot"></nav>
+  </header>
+</div>
+
+<div class="auth-wrap">
+  <div class="term">
+    <div class="term-bar">
+      <span class="term-dot r"></span>
+      <span class="term-dot y"></span>
+      <span class="term-dot g"></span>
+      <span class="term-title">adduser</span>
+    </div>
+    <div class="term-body">
+      <div class="prompt-line">
+        <span class="ps1">~$</span>
+        <span>adduser</span>
+      </div>
+
+      <div class="msg error" id="msg"></div>
+
+      <form id="register-form">
+        <div class="field">
+          <label for="username">usuario (mín. 3 caracteres)</label>
+          <input type="text" id="username" autocomplete="username" minlength="3" required />
+        </div>
+        <div class="field">
+          <label for="password">contraseña (mín. 6 caracteres)</label>
+          <input type="password" id="password" autocomplete="new-password" minlength="6" required />
+        </div>
+        <div class="field">
+          <label for="password2">repite la contraseña</label>
+          <input type="password" id="password2" autocomplete="new-password" minlength="6" required />
+        </div>
+        <button type="submit" class="btn" id="submit-btn">crear cuenta</button>
+      </form>
+
+      <div class="helper-text">
+        ¿ya tienes cuenta? <a href="/login.html">accede aquí</a>.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+const form = document.getElementById("register-form");
+const msg = document.getElementById("msg");
+const btn = document.getElementById("submit-btn");
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  msg.classList.remove("show", "error", "ok");
+
+  const username = document.getElementById("username").value.trim();
+  const password = document.getElementById("password").value;
+  const password2 = document.getElementById("password2").value;
+
+  if (password !== password2) {
+    msg.textContent = "las contraseñas no coinciden.";
+    msg.classList.add("show", "error");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "creando cuenta...";
+
+  try {
+    const res = await apiPost("/api/register", { username, password });
+    const data = await res.json();
+    if (!res.ok) {
+      msg.textContent = data.error || "no se pudo crear la cuenta.";
+      msg.classList.add("show", "error");
+      btn.disabled = false;
+      btn.textContent = "crear cuenta";
+      return;
+    }
+    // auto-login tras registrar
+    const loginRes = await apiPost("/api/login", { username, password });
+    if (loginRes.ok) {
+      window.location.href = "/";
+    } else {
+      window.location.href = "/login.html";
+    }
+  } catch (err) {
+    msg.textContent = "error de red. inténtalo de nuevo.";
+    msg.classList.add("show", "error");
+    btn.disabled = false;
+    btn.textContent = "crear cuenta";
+  }
+});
+</script>
+</body>
+</html>

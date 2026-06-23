@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>admin — __SITE_NAME__</title>
+<link rel="stylesheet" href="/style.css" />
+<style>
+  /* ajustes propios del panel, además del style.css compartido */
+  .admin-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+  .kpi {
+    background: var(--bg-raised);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+  }
+  .kpi .label { font-size: 11.5px; color: var(--fg-dim); margin-bottom: 4px; }
+  .kpi .value { font-size: 20px; color: var(--amber-soft); font-weight: 700; }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+  .tab-btn {
+    background: var(--bg-input);
+    border: 1px solid var(--rule);
+    border-bottom: none;
+    color: var(--fg-dim);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 8px 16px;
+    cursor: pointer;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .tab-btn.active { color: var(--amber); background: var(--bg-raised); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  table.torrents td.ip { font-size: 12px; color: var(--fg-dim); }
+  table.torrents .row-banned td { opacity: 0.45; }
+  .pill {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    border: 1px solid var(--rule);
+  }
+  .pill.banned { color: var(--red); border-color: rgba(193,102,107,0.4); }
+  .pill.active { color: var(--green); border-color: rgba(127,174,132,0.4); }
+
+  .badge {
+    display: none;
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: rgba(193,102,107,0.18);
+    color: var(--red);
+    border: 1px solid rgba(193,102,107,0.4);
+    margin-left: 4px;
+  }
+  .badge.show { display: inline-block; }
+
+  .mini-btn {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--fg);
+    padding: 4px 9px;
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .mini-btn:hover { border-color: var(--amber-dim); }
+  .mini-btn.danger:hover { border-color: var(--red); color: var(--red); }
+
+  .gate { max-width: 420px; margin: 100px auto; padding: 0 20px; }
+</style>
+</head>
+<body>
+
+<!-- ====== PANTALLA DE ACCESO AL PANEL (pide el token) ====== -->
+<div class="wrap" id="gate-screen">
+  <div class="gate">
+    <div class="term">
+      <div class="term-bar">
+        <span class="term-dot r"></span><span class="term-dot y"></span><span class="term-dot g"></span>
+        <span class="term-title">sudo -s</span>
+      </div>
+      <div class="term-body">
+        <div class="prompt-line">
+          <span class="ps1">~$</span>
+          <span>sudo su</span>
+        </div>
+        <div class="msg error" id="gate-msg"></div>
+        <div class="field">
+          <label for="admin-token-input">token de administrador</label>
+          <input type="password" id="admin-token-input" autocomplete="off" />
+        </div>
+        <button class="btn" id="gate-btn">entrar</button>
+        <p class="helper-text">
+          este token se imprime en la consola del servidor al arrancar el tracker
+          (o lo defines tú mismo con la variable de entorno <code>ADMIN_TOKEN</code>).
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ====== PANEL (oculto hasta validar token) ====== -->
+<div class="wrap" id="panel-screen" style="display:none">
+
+  <header class="site-header">
+    <div class="logo">__SITE_NAME__</div>
+    <nav class="nav">
+      <a href="/">‹ volver al sitio</a>
+      <a href="#" id="logout-admin">cerrar panel</a>
+    </nav>
+  </header>
+
+  <div class="admin-grid" id="kpi-grid">
+    <div class="kpi"><div class="label">usuarios registrados</div><div class="value" id="kpi-users">—</div></div>
+    <div class="kpi"><div class="label">usuarios suspendidos</div><div class="value" id="kpi-banned">—</div></div>
+    <div class="kpi"><div class="label">torrents indexados</div><div class="value" id="kpi-torrents">—</div></div>
+    <div class="kpi"><div class="label">descargas completadas</div><div class="value" id="kpi-downloads">—</div></div>
+    <div class="kpi"><div class="label">peers activos ahora</div><div class="value" id="kpi-peers">—</div></div>
+    <div class="kpi"><div class="label">tamaño total indexado</div><div class="value" id="kpi-size">—</div></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="reports">reportes <span class="badge" id="reports-badge"></span></button>
+    <button class="tab-btn" data-tab="users">usuarios</button>
+    <button class="tab-btn" data-tab="torrents">torrents</button>
+  </div>
+
+  <!-- ---------- TAB REPORTES ---------- -->
+  <div class="tab-panel active" id="tab-reports">
+    <div class="section-label"><span class="cmd">$</span><span>cat</span><span class="flag">/var/log/reports --pending</span></div>
+    <table class="torrents" id="reports-table">
+      <thead>
+        <tr>
+          <th>torrent</th>
+          <th>motivo</th>
+          <th>detalles</th>
+          <th>reportado por</th>
+          <th>fecha</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="reports-body">
+        <tr class="empty-row"><td colspan="6">cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ---------- TAB USUARIOS ---------- -->
+  <div class="tab-panel" id="tab-users">
+    <div class="section-label"><span class="cmd">$</span><span>cat</span><span class="flag">/etc/passwd</span></div>
+    <table class="torrents" id="users-table">
+      <thead>
+        <tr>
+          <th>usuario</th>
+          <th>registrado</th>
+          <th>ip registro</th>
+          <th>último login</th>
+          <th>ip último login</th>
+          <th>archivos subidos</th>
+          <th>estado</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="users-body">
+        <tr class="empty-row"><td colspan="8">cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ---------- TAB TORRENTS ---------- -->
+  <div class="tab-panel" id="tab-torrents">
+    <div class="section-label"><span class="cmd">$</span><span>ls</span><span class="flag">-la ./torrents</span></div>
+    <table class="torrents" id="torrents-table">
+      <thead>
+        <tr>
+          <th>nombre</th>
+          <th>subido por</th>
+          <th>fecha</th>
+          <th>tamaño</th>
+          <th>semillas</th>
+          <th>pares</th>
+          <th>descargas</th>
+          <th>reportes</th>
+          <th>info_hash</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="torrents-body">
+        <tr class="empty-row"><td colspan="10">cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<script src="/app.js"></script>
+<script>
+const TOKEN_KEY = "tracker_admin_token";
+
+function getToken() { return sessionStorage.getItem(TOKEN_KEY) || ""; }
+function setToken(t) { sessionStorage.setItem(TOKEN_KEY, t); }
+function clearToken() { sessionStorage.removeItem(TOKEN_KEY); }
+
+async function adminFetch(path, opts = {}) {
+  const headers = Object.assign({ "X-Admin-Token": getToken() }, opts.headers || {});
+  return fetch(path, Object.assign({}, opts, { headers }));
+}
+
+function showGate(message) {
+  document.getElementById("gate-screen").style.display = "block";
+  document.getElementById("panel-screen").style.display = "none";
+  if (message) {
+    const m = document.getElementById("gate-msg");
+    m.textContent = message;
+    m.classList.add("show");
+  }
+}
+
+function showPanel() {
+  document.getElementById("gate-screen").style.display = "none";
+  document.getElementById("panel-screen").style.display = "block";
+  loadOverview();
+  loadReports();
+  loadUsers();
+  loadTorrents();
+}
+
+document.getElementById("gate-btn").addEventListener("click", async () => {
+  const val = document.getElementById("admin-token-input").value.trim();
+  if (!val) return;
+  setToken(val);
+  const ok = await testToken();
+  if (ok) showPanel();
+  else showGate("token inválido. revisa la consola del servidor.");
+});
+
+document.getElementById("admin-token-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("gate-btn").click();
+});
+
+document.getElementById("logout-admin").addEventListener("click", (e) => {
+  e.preventDefault();
+  clearToken();
+  showGate();
+});
+
+async function testToken() {
+  try {
+    const res = await adminFetch("/api/admin/overview");
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+// pestañas
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
+  });
+});
+
+async function loadOverview() {
+  try {
+    const res = await adminFetch("/api/admin/overview");
+    if (!res.ok) { showGate("la sesión de admin caducó o el token cambió."); return; }
+    const d = await res.json();
+    document.getElementById("kpi-users").textContent = d.total_users;
+    document.getElementById("kpi-banned").textContent = d.banned_users;
+    document.getElementById("kpi-torrents").textContent = d.total_torrents;
+    document.getElementById("kpi-downloads").textContent = d.total_downloads;
+    document.getElementById("kpi-peers").textContent = d.active_peers;
+    document.getElementById("kpi-size").textContent = fmtSize(d.total_size);
+  } catch (e) {
+    showGate("error de red al cargar el resumen.");
+  }
+}
+
+async function loadUsers() {
+  const tbody = document.getElementById("users-body");
+  try {
+    const res = await adminFetch("/api/admin/users");
+    const list = await res.json();
+    if (!list || list.length === 0) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="8">todavía no hay usuarios registrados.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = list.map((u) => `
+      <tr class="${u.banned ? "row-banned" : ""}">
+        <td class="name">${escapeHtml(u.username)}</td>
+        <td class="num">${fmtDate(u.created_at)}</td>
+        <td class="ip">${escapeHtml(u.registered_ip || "—")}</td>
+        <td class="num">${u.last_login_at ? fmtDate(u.last_login_at) : "nunca"}</td>
+        <td class="ip">${escapeHtml(u.last_login_ip || "—")}</td>
+        <td class="num">${u.upload_count}</td>
+        <td>${u.banned ? '<span class="pill banned">suspendido</span>' : '<span class="pill active">activo</span>'}</td>
+        <td>
+          <button class="mini-btn ${u.banned ? "" : "danger"}" data-user="${escapeHtml(u.username)}" data-action="${u.banned ? "unban" : "ban"}">
+            ${u.banned ? "reactivar" : "suspender"}
+          </button>
+          <button class="mini-btn danger" data-user="${escapeHtml(u.username)}" data-action="delete-user" data-uploads="${u.upload_count}">
+            eliminar
+          </button>
+        </td>
+      </tr>
+    `).join("");
+
+    tbody.querySelectorAll("button[data-action='ban'], button[data-action='unban']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const username = btn.dataset.user;
+        const banned = btn.dataset.action === "ban";
+        if (banned && !confirm(`¿Suspender a "${username}"? No podrá iniciar sesión ni subir torrents.`)) return;
+        await adminFetch("/api/admin/users/ban", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, banned }),
+        });
+        loadUsers();
+        loadOverview();
+      });
+    });
+
+    tbody.querySelectorAll("button[data-action='delete-user']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const username = btn.dataset.user;
+        const uploads = btn.dataset.uploads;
+        if (!confirm(`¿Eliminar PERMANENTEMENTE a "${username}" y sus ${uploads} torrent(s)? Esta acción no se puede deshacer.`)) return;
+        await adminFetch("/api/admin/users/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username }),
+        });
+        loadUsers();
+        loadTorrents();
+        loadOverview();
+      });
+    });
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">error cargando usuarios.</td></tr>`;
+  }
+}
+
+async function loadReports() {
+  const tbody = document.getElementById("reports-body");
+  const badge = document.getElementById("reports-badge");
+  try {
+    const res = await adminFetch("/api/admin/reports?resolved=false");
+    const list = await res.json();
+
+    if (badge) {
+      badge.textContent = list && list.length ? list.length : "";
+      badge.classList.toggle("show", !!(list && list.length));
+    }
+
+    if (!list || list.length === 0) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="6">no hay reportes pendientes.</td></tr>`;
+      return;
+    }
+
+    const reasonLabels = { illegal: "no legal", malicious: "malicioso", corrupt: "corrupto", fake: "falso", other: "otro" };
+
+    tbody.innerHTML = list.map((r) => `
+      <tr>
+        <td class="name">${escapeHtml(r.torrent_name)}</td>
+        <td>${reasonLabels[r.reason] || escapeHtml(r.reason)}</td>
+        <td style="max-width:220px; white-space:normal;">${escapeHtml(r.details || "—")}</td>
+        <td class="ip">${r.username ? escapeHtml(r.username) : "anónimo"} (${escapeHtml(r.reporter_ip)})</td>
+        <td class="num">${fmtDate(r.created_at)}</td>
+        <td>
+          <button class="mini-btn" data-dismiss="${r.id}">descartar</button>
+          <button class="mini-btn danger" data-delete-hash="${r.info_hash}" data-delete-report="${r.id}">borrar torrent</button>
+        </td>
+      </tr>
+    `).join("");
+
+    tbody.querySelectorAll("button[data-dismiss]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        await adminFetch("/api/admin/reports/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: btn.dataset.dismiss, resolved: true }),
+        });
+        loadReports();
+      });
+    });
+
+    tbody.querySelectorAll("button[data-delete-hash]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("¿Borrar este torrent del índice y del disco? No se puede deshacer.")) return;
+        await adminFetch("/api/admin/torrents/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ info_hash: btn.dataset.deleteHash }),
+        });
+        await adminFetch("/api/admin/reports/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: btn.dataset.deleteReport, resolved: true }),
+        });
+        loadReports();
+        loadTorrents();
+        loadOverview();
+      });
+    });
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">error cargando reportes.</td></tr>`;
+  }
+}
+
+async function loadTorrents() {
+  const tbody = document.getElementById("torrents-body");
+  try {
+    const res = await adminFetch("/api/admin/torrents");
+    const list = await res.json();
+    if (!list || list.length === 0) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="10">todavía no hay torrents indexados.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = list.map((t) => `
+      <tr>
+        <td class="name">${escapeHtml(t.name)}</td>
+        <td>${escapeHtml(t.uploader || "—")}</td>
+        <td class="num">${fmtDate(t.uploaded)}</td>
+        <td class="num">${fmtSize(t.size)}</td>
+        <td class="seeds num">${t.seeders}</td>
+        <td class="peers num">${t.leechers}</td>
+        <td class="num">${t.downloads}</td>
+        <td>${t.report_count > 0 ? `<span class="pill banned">${t.report_count}</span>` : `<span class="pill active">0</span>`}</td>
+        <td class="ip">${t.info_hash.slice(0, 10)}…</td>
+        <td><button class="mini-btn danger" data-hash="${t.info_hash}">borrar</button></td>
+      </tr>
+    `).join("");
+
+    tbody.querySelectorAll("button[data-hash]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("¿Borrar este torrent del índice y del disco? No se puede deshacer.")) return;
+        await adminFetch("/api/admin/torrents/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ info_hash: btn.dataset.hash }),
+        });
+        loadTorrents();
+        loadOverview();
+      });
+    });
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="10">error cargando torrents.</td></tr>`;
+  }
+}
+
+// al cargar la página: si ya hay token guardado, probarlo directamente
+(async () => {
+  if (getToken()) {
+    const ok = await testToken();
+    if (ok) { showPanel(); return; }
+  }
+  showGate();
+})();
+</script>
+</body>
+</html>

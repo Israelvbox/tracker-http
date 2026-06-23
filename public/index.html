@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>__SITE_NAME__ — índice de torrents</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wrap">
+
+  <header class="site-header">
+    <div class="logo">__SITE_NAME__</div>
+    <nav class="nav" id="nav-slot">
+      <!-- rellenado por app.js según sesión -->
+    </nav>
+  </header>
+
+  <div class="term">
+    <div class="term-bar">
+      <span class="term-dot r"></span>
+      <span class="term-dot y"></span>
+      <span class="term-dot g"></span>
+      <span class="term-title">~/torrents</span>
+    </div>
+    <div class="term-body">
+      <div class="prompt-line">
+        <span class="ps1">~$</span>
+        <span>grep</span>
+      </div>
+      <div class="search-row">
+        <span class="prefix">/</span>
+        <input type="text" id="search-input" placeholder="buscar torrents..." autocomplete="off" />
+        <span class="cursor"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">
+    <span class="cmd">$</span>
+    <span>top</span>
+    <span class="flag">--downloads -n 10</span>
+  </div>
+  <table class="torrents" id="table-top">
+    <thead>
+      <tr>
+        <th></th>
+        <th>nombre</th>
+        <th class="col-uploaded">subido</th>
+        <th>tamaño</th>
+        <th>semillas</th>
+        <th>pares</th>
+        <th>descargas</th>
+      </tr>
+    </thead>
+    <tbody id="top-body">
+      <tr class="empty-row"><td colspan="7">cargando...</td></tr>
+    </tbody>
+  </table>
+
+  <div class="section-label">
+    <span class="cmd">$</span>
+    <span>ls</span>
+    <span class="flag">-lt ./torrents</span>
+    <span id="recent-label-extra"></span>
+  </div>
+  <table class="torrents" id="table-recent">
+    <thead>
+      <tr>
+        <th>nombre</th>
+        <th class="col-uploaded">subido</th>
+        <th>tamaño</th>
+        <th>semillas</th>
+        <th>pares</th>
+        <th class="col-uploader">por</th>
+      </tr>
+    </thead>
+    <tbody id="recent-body">
+      <tr class="empty-row"><td colspan="6">cargando...</td></tr>
+    </tbody>
+  </table>
+
+  <footer class="site-footer">
+    <div class="stat">torrents indexados: <strong id="stat-torrents">—</strong></div>
+    <div class="stat">usuarios activos: <strong id="stat-users">—</strong></div>
+  </footer>
+
+</div>
+
+<script src="/app.js"></script>
+<script>
+function rowHtml(t, { withRank, rank } = {}) {
+  const dlHref = "/torrents/" + encodeURIComponent(t.name);
+  const reportHref = "/report.html?hash=" + encodeURIComponent(t.info_hash) + "&name=" + encodeURIComponent(t.name);
+  const rankCell = withRank ? `<td class="rank">${rank}</td>` : "";
+  return `
+    <tr>
+      ${rankCell}
+      <td class="name">
+        <a href="${dlHref}" download>${escapeHtml(t.name)}</a>
+        <a href="${reportHref}" class="report-link" title="reportar este torrent">⚑</a>
+      </td>
+      <td class="col-uploaded num">${fmtDate(t.uploaded)}</td>
+      <td class="num">${fmtSize(t.size)}</td>
+      <td class="seeds num">${t.seeders}</td>
+      <td class="peers num">${t.leechers}</td>
+      ${withRank ? `<td class="num">${t.downloads}</td>` : `<td class="uploader col-uploader">${escapeHtml(t.uploader || "—")}</td>`}
+    </tr>
+  `;
+}
+
+async function loadTop() {
+  const tbody = document.getElementById("top-body");
+  try {
+    const res = await apiGet("/api/torrents?sort=top");
+    const list = (await res.json()) || [];
+    if (list.length === 0) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="7">aún no hay torrents indexados. sé el primero en subir un torrent.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = list.slice(0, 10).map((t, i) => rowHtml(t, { withRank: true, rank: i + 1 })).join("");
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">error cargando el top. reintenta más tarde.</td></tr>`;
+  }
+}
+
+let currentSearch = "";
+
+async function loadRecent() {
+  const tbody = document.getElementById("recent-body");
+  const extra = document.getElementById("recent-label-extra");
+  try {
+    const q = currentSearch ? `&search=${encodeURIComponent(currentSearch)}` : "";
+    const res = await apiGet("/api/torrents?sort=recent" + q);
+    const list = (await res.json()) || [];
+    extra.textContent = currentSearch ? ` | grep "${currentSearch}"` : "";
+    if (list.length === 0) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="6">${currentSearch ? "sin resultados para esa búsqueda." : "aún no hay torrents indexados."}</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = list.map((t) => rowHtml(t, { withRank: false })).join("");
+  } catch (e) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="6">error cargando el listado. reintenta más tarde.</td></tr>`;
+  }
+}
+
+let debounceTimer;
+document.getElementById("search-input").addEventListener("input", (e) => {
+  currentSearch = e.target.value.trim();
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(loadRecent, 300);
+});
+
+loadTop();
+loadRecent();
+</script>
+</body>
+</html>

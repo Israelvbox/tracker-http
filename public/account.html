@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>mi cuenta — __SITE_NAME__</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <header class="site-header">
+    <div class="logo"><a href="/" style="color:inherit">__SITE_NAME__</a></div>
+    <nav class="nav" id="nav-slot"></nav>
+  </header>
+</div>
+
+<div class="auth-wrap">
+  <div class="term">
+    <div class="term-bar">
+      <span class="term-dot r"></span>
+      <span class="term-dot y"></span>
+      <span class="term-dot g"></span>
+      <span class="term-title">mi cuenta</span>
+    </div>
+    <div class="term-body">
+      <div class="prompt-line">
+        <span class="ps1">~$</span>
+        <span>whoami</span>
+      </div>
+      <p class="helper-text" id="username-display" style="margin-top:-4px; margin-bottom:24px;"></p>
+
+      <div id="not-logged" style="display:none">
+        <p class="helper-text">tienes que <a href="/login.html">acceder</a> para ver esta página.</p>
+      </div>
+
+      <div id="account-panel" style="display:none">
+        <div class="prompt-line" style="margin-top:20px;">
+          <span class="ps1">~$</span>
+          <span style="color: var(--red)">rm -rf ~/cuenta</span>
+        </div>
+
+        <p class="helper-text" style="margin-bottom:16px;">
+          esto borrará tu cuenta <strong>permanentemente</strong>, junto con <strong>todos los torrents que has subido</strong>
+          (se eliminarán del índice y del servidor). Esta acción no se puede deshacer.
+        </p>
+
+        <div class="msg error" id="msg"></div>
+        <div class="msg ok" id="msg-ok"></div>
+
+        <form id="delete-form">
+          <div class="field">
+            <label for="password">confirma tu contraseña para continuar</label>
+            <input type="password" id="password" autocomplete="current-password" required />
+          </div>
+          <button type="submit" class="btn" id="submit-btn" style="background: var(--red); color: var(--fg);">
+            eliminar mi cuenta y mis torrents
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+async function init() {
+  const res = await apiGet("/api/me");
+  const data = await res.json();
+  if (!data.logged_in) {
+    document.getElementById("not-logged").style.display = "block";
+    return;
+  }
+  document.getElementById("username-display").textContent = data.username;
+  document.getElementById("account-panel").style.display = "block";
+}
+init();
+
+const form = document.getElementById("delete-form");
+const msg = document.getElementById("msg");
+const msgOk = document.getElementById("msg-ok");
+const btn = document.getElementById("submit-btn");
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  msg.classList.remove("show");
+  msgOk.classList.remove("show");
+
+  const password = document.getElementById("password").value;
+
+  if (!confirm("¿Seguro? Se borrará tu cuenta y todos tus torrents indexados. No se puede deshacer.")) {
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "eliminando...";
+
+  try {
+    const res = await apiPost("/api/account/delete", { password });
+    const data = await res.json();
+    if (!res.ok) {
+      msg.textContent = data.error || "no se pudo eliminar la cuenta.";
+      msg.classList.add("show");
+      btn.disabled = false;
+      btn.textContent = "eliminar mi cuenta y mis torrents";
+      return;
+    }
+    msgOk.textContent = `cuenta eliminada (${data.deleted_torrents} torrents borrados). redirigiendo...`;
+    msgOk.classList.add("show");
+    form.style.display = "none";
+    setTimeout(() => { window.location.href = "/"; }, 2500);
+  } catch (err) {
+    msg.textContent = "error de red. inténtalo de nuevo.";
+    msg.classList.add("show");
+    btn.disabled = false;
+    btn.textContent = "eliminar mi cuenta y mis torrents";
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>acceder — __SITE_NAME__</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <header class="site-header">
+    <div class="logo"><a href="/" style="color:inherit">__SITE_NAME__</a></div>
+    <nav class="nav" id="nav-slot"></nav>
+  </header>
+</div>
+
+<div class="auth-wrap">
+  <div class="term">
+    <div class="term-bar">
+      <span class="term-dot r"></span>
+      <span class="term-dot y"></span>
+      <span class="term-dot g"></span>
+      <span class="term-title">login</span>
+    </div>
+    <div class="term-body">
+      <div class="prompt-line">
+        <span class="ps1">~$</span>
+        <span>login</span>
+      </div>
+
+      <div class="msg error" id="msg"></div>
+
+      <form id="login-form">
+        <div class="field">
+          <label for="username">usuario</label>
+          <input type="text" id="username" autocomplete="username" required />
+        </div>
+        <div class="field">
+          <label for="password">contraseña</label>
+          <input type="password" id="password" autocomplete="current-password" required />
+        </div>
+        <button type="submit" class="btn" id="submit-btn">acceder</button>
+      </form>
+
+      <div class="helper-text">
+        ¿no tienes cuenta? <a href="/register.html">regístrate aquí</a> para poder subir torrents.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+const form = document.getElementById("login-form");
+const msg = document.getElementById("msg");
+const btn = document.getElementById("submit-btn");
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  msg.classList.remove("show", "error", "ok");
+  btn.disabled = true;
+  btn.textContent = "accediendo...";
+
+  const username = document.getElementById("username").value.trim();
+  const password = document.getElementById("password").value;
+
+  try {
+    const res = await apiPost("/api/login", { username, password });
+    const data = await res.json();
+    if (!res.ok) {
+      msg.textContent = data.error || "no se pudo iniciar sesión.";
+      msg.classList.add("show", "error");
+      btn.disabled = false;
+      btn.textContent = "acceder";
+      return;
+    }
+    window.location.href = "/";
+  } catch (err) {
+    msg.textContent = "error de red. inténtalo de nuevo.";
+    msg.classList.add("show", "error");
+    btn.disabled = false;
+    btn.textContent = "acceder";
+  }
+});
+</script>
+</body>
+</html>

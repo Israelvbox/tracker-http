@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>subir torrent — __SITE_NAME__</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="wrap">
+  <header class="site-header">
+    <div class="logo"><a href="/" style="color:inherit">__SITE_NAME__</a></div>
+    <nav class="nav" id="nav-slot"></nav>
+  </header>
+
+  <div class="term">
+    <div class="term-bar">
+      <span class="term-dot r"></span>
+      <span class="term-dot y"></span>
+      <span class="term-dot g"></span>
+      <span class="term-title">upload</span>
+    </div>
+    <div class="term-body">
+      <div class="prompt-line">
+        <span class="ps1">~$</span>
+        <span>scp ./archivo.torrent servidor:~/torrents/</span>
+      </div>
+
+      <div class="msg error" id="msg"></div>
+      <div class="msg ok" id="msg-ok"></div>
+
+      <div id="auth-required" style="display:none">
+        <p class="helper-text">tienes que <a href="/login.html">acceder</a> o <a href="/register.html">registrarte</a> para subir torrents. la descarga es libre, la subida requiere cuenta.</p>
+      </div>
+
+      <form id="upload-form">
+        <div class="field">
+          <label for="file">archivo .torrent</label>
+          <input type="file" id="file" accept=".torrent" required />
+        </div>
+        <button type="submit" class="btn" id="submit-btn">subir e indexar</button>
+      </form>
+
+      <p class="helper-text">
+        revisa las normas de uso de este sitio antes de subir contenido. el tracker reescribe el campo "announce" del .torrent automáticamente al subirlo.
+      </p>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script>
+async function checkAuth() {
+  const res = await apiGet("/api/me");
+  const data = await res.json();
+  if (!data.logged_in) {
+    document.getElementById("auth-required").style.display = "block";
+    document.getElementById("upload-form").style.display = "none";
+  }
+}
+checkAuth();
+
+const form = document.getElementById("upload-form");
+const msg = document.getElementById("msg");
+const msgOk = document.getElementById("msg-ok");
+const btn = document.getElementById("submit-btn");
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  msg.classList.remove("show");
+  msgOk.classList.remove("show");
+
+  const fileInput = document.getElementById("file");
+  const file = fileInput.files[0];
+  if (!file) return;
+
+  btn.disabled = true;
+  btn.textContent = "subiendo...";
+
+  const formData = new FormData();
+  formData.append("torrent", file);
+
+  try {
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      credentials: "same-origin",
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      msg.textContent = data.error || "no se pudo subir el torrent.";
+      msg.classList.add("show");
+      btn.disabled = false;
+      btn.textContent = "subir e indexar";
+      return;
+    }
+    msgOk.textContent = "torrent indexado correctamente. info_hash: " + data.info_hash;
+    msgOk.classList.add("show");
+    fileInput.value = "";
+    btn.disabled = false;
+    btn.textContent = "subir e indexar";
+  } catch (err) {
+    msg.textContent = "error de red. inténtalo de nuevo.";
+    msg.classList.add("show");
+    btn.disabled = false;
+    btn.textContent = "subir e indexar";
+  }
+});
+</script>
+</body>
+</html>
