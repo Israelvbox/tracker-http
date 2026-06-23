@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="tracker"
 
 # ============================================================
-# COLORES
+# COLORES (solo para que el instalador se lea mejor, opcional)
 # ============================================================
 BOLD='\033[1m'
 GREEN='\033[0;32m'
@@ -79,7 +79,7 @@ echo -e "==========================================================${NC}"
 echo ""
 
 # ============================================================
-# PREGUNTAS INTERACTIVAS
+# PREGUNTAS INTERACTIVAS (si no se pasaron por argumento)
 # ============================================================
 
 ask() {
@@ -199,12 +199,13 @@ install_if_missing() {
   fi
 }
 
+install_if_missing sudo
 install_if_missing postgresql
 install_if_missing nginx
 install_if_missing curl
 install_if_missing openssl
 
-# --- Go: instalamos la versión oficial ---
+# --- Go: instalamos la versión oficial (no la de apt, suele ir muy atrasada) ---
 GO_VERSION="1.22.5"
 if command -v go &>/dev/null && go version 2>/dev/null | grep -q "go${GO_VERSION}"; then
   success "Go ${GO_VERSION} ya está instalado"
@@ -235,15 +236,27 @@ info "Configurando PostgreSQL..."
 
 systemctl enable --now postgresql
 
-DB_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'") || true
+# Usamos 'runuser' en vez de 'sudo -u postgres' para no depender de que el
+# paquete 'sudo' esté instalado (algunas imágenes mínimas de Debian no lo
+# traen de fábrica).
+pg() { runuser -u postgres -- psql "$@"; }
+
+DB_EXISTS=$(pg -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'") || true
 
 if [[ "$DB_EXISTS" == "1" ]]; then
-  warn "La base de datos '${DB_NAME}' ya existe. No se modifica ni se borra nada."
-  warn "Si la contraseña que escribiste no es la que ya tiene configurada esa BD,"
-  warn "edita DATABASE_URL a mano en /etc/systemd/system/${SERVICE_NAME}.service después."
+  info "La base de datos '${DB_NAME}' ya existe. Se mantienen sus datos."
 else
-  sudo -u postgres psql <<EOF
-CREATE DATABASE ${DB_NAME};
+  info "Creando la base de datos '${DB_NAME}'..."
+  pg -c "CREATE DATABASE ${DB_NAME};"
+fi
+
+# IMPORTANTE: esto se ejecuta SIEMPRE, exista o no la base de datos de antes.
+# Así, si vuelves a ejecutar el instalador (por ejemplo tras un fallo a medias
+# en una ejecución anterior), la contraseña de Postgres y la que se guarda en
+# el servicio systemd SIEMPRE quedan sincronizadas. Sin esto, un segundo
+# intento podía generar una contraseña nueva sin actualizar Postgres,
+# dejando el servicio sin poder conectar nunca.
+pg <<EOF
 DO \$\$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '${DB_USER}') THEN
@@ -256,16 +269,15 @@ END
 GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};
 EOF
 
-  sudo -u postgres psql -d "${DB_NAME}" <<EOF
+pg -d "${DB_NAME}" <<EOF
 GRANT ALL ON SCHEMA public TO ${DB_USER};
 ALTER SCHEMA public OWNER TO ${DB_USER};
 EOF
 
-  success "Base de datos '${DB_NAME}' y usuario '${DB_USER}' configurados."
-fi
+success "Base de datos '${DB_NAME}' y usuario '${DB_USER}' sincronizados (contraseña incluida)."
 
 # ============================================================
-# 3. DESPLIEGUE DEL CÓDIGO
+# 3. DESPLIEGUE DEL CÓDIGO (con sustitución de placeholders)
 # ============================================================
 echo ""
 info "Desplegando código en ${INSTALL_DIR}..."
