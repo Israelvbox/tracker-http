@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,7 +42,6 @@ type User struct {
 	RegisteredIP string    `json:"registered_ip"`
 	LastLoginIP  string    `json:"last_login_ip"`
 	LastLoginAt  time.Time `json:"last_login_at"`
-	Banned       bool      `json:"banned"`
 }
 
 type Session struct {
@@ -57,7 +55,6 @@ var (
 
 	peersMap sync.Map // info_hash (string 20 bytes) -> *sync.Map (peer_id -> Peer), siempre en memoria
 
-	// URL pública del tracker tal como la verán los clientes BitTorrent.
 	// El instalador (install.sh) sustituye __DOMAIN__ por el dominio real configurado.
 	TrackerAnnounceURL = "https://__DOMAIN__/announce"
 
@@ -67,7 +64,7 @@ var (
 
 const (
 	AnnounceInterval = 600              // 10 minutos: cada cuánto deben re-anunciarse los clientes
-	PeerExpiryTime   = 20 * time.Minute // debe ser MAYOR que AnnounceInterval, con margen para anuncios tardíos
+	PeerExpiryTime   = 20 * time.Minute // debe ser MAYOR que AnnounceInterval, con margen
 	SessionDuration  = 7 * 24 * time.Hour
 	TorrentsDir      = "/var/www/tracker/public/torrents"
 )
@@ -81,7 +78,6 @@ func main() {
 
 	go startJanitor()
 	go startSessionJanitor()
-	go startReportRateLimitJanitor()
 
 	http.HandleFunc("/announce", announceHandler)
 	http.HandleFunc("/api/register", registerHandler)
@@ -91,17 +87,16 @@ func main() {
 	http.HandleFunc("/api/torrents", listTorrentsHandler)
 	http.HandleFunc("/api/stats", globalStatsHandler)
 	http.HandleFunc("/api/me", meHandler)
-	http.HandleFunc("/api/report", reportHandler)
-	http.HandleFunc("/api/account/delete", accountDeleteHandler)
 
 	http.HandleFunc("/api/admin/users", adminUsersHandler)
-	http.HandleFunc("/api/admin/users/ban", adminBanUserHandler)
+	http.HandleFunc("/api/admin/users/create", adminCreateUserHandler)
 	http.HandleFunc("/api/admin/users/delete", adminDeleteUserHandler)
+	http.HandleFunc("/api/admin/invites", adminListInvitesHandler)
+	http.HandleFunc("/api/admin/invites/create", adminCreateInviteHandler)
+	http.HandleFunc("/api/admin/invites/revoke", adminRevokeInviteHandler)
 	http.HandleFunc("/api/admin/torrents", adminTorrentsHandler)
 	http.HandleFunc("/api/admin/torrents/delete", adminDeleteTorrentHandler)
 	http.HandleFunc("/api/admin/overview", adminOverviewHandler)
-	http.HandleFunc("/api/admin/reports", adminReportsHandler)
-	http.HandleFunc("/api/admin/reports/resolve", adminResolveReportHandler)
 
 	fmt.Println("🚀 Tracker corriendo en puerto 8080...")
 	log.Fatal(http.ListenAndServe(":8080", nil))
@@ -144,7 +139,15 @@ func generateToken() string {
 	return hex.EncodeToString(b)
 }
 
-// getClientIP extrae la IP real del cliente, respetando X-Forwarded-For (Nginx).
+// generateInviteCode genera un código de invitación más corto y legible
+// que un token completo (sigue siendo aleatorio y difícil de adivinar).
+func generateInviteCode() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// getClientIP extrae la IP real del cliente, respetando X-Forwarded-For (proxy/Nginx).
 func getClientIP(r *http.Request) string {
 	ipStr := r.Header.Get("X-Forwarded-For")
 	if ipStr != "" {
@@ -163,6 +166,8 @@ func jsonError(w http.ResponseWriter, msg string, code int) {
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
+// registerHandler crea una cuenta SOLO si se aporta un código de invitación
+// válido, sin usar y sin revocar. No hay registro abierto.
 func registerHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, "Método no permitido", http.StatusMethodNotAllowed)
@@ -170,8 +175,9 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username   string `json:"username"`
+		Password   string `json:"password"`
+		InviteCode string `json:"invite_code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "JSON inválido", http.StatusBadRequest)
@@ -179,6 +185,12 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.Username = strings.TrimSpace(req.Username)
+	req.InviteCode = strings.TrimSpace(req.InviteCode)
+
+	if req.InviteCode == "" {
+		jsonError(w, "Necesitas un código de invitación para registrarte", http.StatusForbidden)
+		return
+	}
 	if len(req.Username) < 3 || len(req.Password) < 6 {
 		jsonError(w, "Usuario mín. 3 caracteres, contraseña mín. 6", http.StatusBadRequest)
 		return
@@ -200,12 +212,12 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := dbCreateUser(req.Username, hash, getClientIP(r)); err != nil {
+	if err := dbRegisterWithInvite(req.Username, hash, getClientIP(r), req.InviteCode); err != nil {
 		if isUniqueViolation(err) {
 			jsonError(w, "El usuario ya existe", http.StatusConflict)
 			return
 		}
-		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
+		jsonError(w, err.Error(), http.StatusForbidden)
 		return
 	}
 
@@ -236,11 +248,6 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 
 	if found == nil || !verifyPassword(req.Password, found.PasswordHash) {
 		jsonError(w, "Usuario o contraseña incorrectos", http.StatusUnauthorized)
-		return
-	}
-
-	if found.Banned {
-		jsonError(w, "Esta cuenta ha sido suspendida", http.StatusForbidden)
 		return
 	}
 
@@ -403,15 +410,6 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "Debes iniciar sesión para subir torrents", http.StatusUnauthorized)
 		return
 	}
-	banned, err := dbIsUserBanned(username)
-	if err != nil {
-		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
-		return
-	}
-	if banned {
-		jsonError(w, "Tu cuenta ha sido suspendida", http.StatusForbidden)
-		return
-	}
 
 	r.ParseMultipartForm(10 << 20)
 	file, header, err := r.FormFile("torrent")
@@ -438,8 +436,26 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	torrentMap["announce"] = TrackerAnnounceURL
-	delete(torrentMap, "announce-list")
+	// Añadimos nuestro tracker como prioritario (primer tier), conservando los
+	// trackers originales del .torrent como respaldo en tiers siguientes —
+	// en vez de borrarlos. Así, si nuestro tracker no responde, el cliente
+	// puede caer de vuelta al enjambre original (p.ej. el oficial de una
+	// distro Linux), y de paso nunca quedamos aislados de ese enjambre.
+	ourTier := []interface{}{TrackerAnnounceURL}
+	var combinedTiers []interface{}
+	combinedTiers = append(combinedTiers, ourTier)
+
+	if existingList, ok := torrentMap["announce-list"].([]interface{}); ok {
+		for _, tier := range existingList {
+			combinedTiers = append(combinedTiers, tier)
+		}
+	} else if existingAnnounce, ok := torrentMap["announce"].(string); ok &&
+		existingAnnounce != "" && existingAnnounce != TrackerAnnounceURL {
+		combinedTiers = append(combinedTiers, []interface{}{existingAnnounce})
+	}
+
+	torrentMap["announce"] = TrackerAnnounceURL // compatibilidad con clientes antiguos que ignoran announce-list
+	torrentMap["announce-list"] = combinedTiers
 
 	infoMap, ok := torrentMap["info"]
 	if !ok {
@@ -530,9 +546,8 @@ func seedersLeechersFor(infoHash string) (int, int) {
 func listTorrentsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	searchQuery := strings.TrimSpace(r.URL.Query().Get("search"))
-	sortType := r.URL.Query().Get("sort") // "top" o "recent"
 
-	snapshot, err := dbListTorrents(searchQuery, sortType)
+	snapshot, err := dbListTorrents(searchQuery)
 	if err != nil {
 		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
 		return
@@ -577,7 +592,7 @@ func globalStatsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // =========================================================
-// PANEL DE ADMINISTRACIÓN
+// PANEL DE ADMINISTRACIÓN — USUARIOS
 // =========================================================
 
 type AdminUserView struct {
@@ -587,7 +602,6 @@ type AdminUserView struct {
 	LastLoginIP  string `json:"last_login_ip"`
 	LastLoginAt  string `json:"last_login_at"`
 	UploadCount  int    `json:"upload_count"`
-	Banned       bool   `json:"banned"`
 }
 
 func adminUsersHandler(w http.ResponseWriter, r *http.Request) {
@@ -607,14 +621,9 @@ func adminUsersHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out)
 }
 
-// deleteTorrentFile borra el .torrent del disco de forma segura (mismo
-// saneado de nombre que se usa al guardarlo en uploadHandler).
-func deleteTorrentFile(fileName string) {
-	safeName := strings.ReplaceAll(fileName, "/", "_")
-	os.Remove(TorrentsDir + "/" + safeName)
-}
-
-func adminBanUserHandler(w http.ResponseWriter, r *http.Request) {
+// adminCreateUserHandler permite al admin crear una cuenta directamente,
+// sin pasar por invitación (alta inmediata, admin decide usuario y contraseña).
+func adminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
@@ -625,57 +634,6 @@ func adminBanUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Username string `json:"username"`
-		Banned   bool   `json:"banned"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "JSON inválido", http.StatusBadRequest)
-		return
-	}
-
-	found, err := dbSetUserBanned(req.Username, req.Banned)
-	if err != nil {
-		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
-		return
-	}
-	if !found {
-		jsonError(w, "Usuario no encontrado", http.StatusNotFound)
-		return
-	}
-
-	if req.Banned {
-		sessionsMutex.Lock()
-		for token, s := range sessions {
-			if strings.EqualFold(s.Username, req.Username) {
-				delete(sessions, token)
-			}
-		}
-		sessionsMutex.Unlock()
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-// =========================================================
-// BORRADO DE CUENTA (autoservicio del propio usuario)
-// =========================================================
-
-// accountDeleteHandler permite a un usuario logueado borrar su propia cuenta.
-// Exige confirmar la contraseña, y borra en cascada todos sus torrents
-// (de la base de datos y del disco).
-func accountDeleteHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		jsonError(w, "Método no permitido", http.StatusMethodNotAllowed)
-		return
-	}
-
-	username := getAuthenticatedUser(r)
-	if username == "" {
-		jsonError(w, "Debes iniciar sesión", http.StatusUnauthorized)
-		return
-	}
-
-	var req struct {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -683,48 +641,48 @@ func accountDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := dbGetUserByUsername(username)
+	req.Username = strings.TrimSpace(req.Username)
+	if len(req.Username) < 3 || len(req.Password) < 6 {
+		jsonError(w, "Usuario mín. 3 caracteres, contraseña mín. 6", http.StatusBadRequest)
+		return
+	}
+
+	exists, err := dbUserExists(req.Username)
 	if err != nil {
 		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
 		return
 	}
-	if user == nil || !verifyPassword(req.Password, user.PasswordHash) {
-		jsonError(w, "Contraseña incorrecta", http.StatusUnauthorized)
+	if exists {
+		jsonError(w, "El usuario ya existe", http.StatusConflict)
 		return
 	}
 
-	fileNames, found, err := dbDeleteUserCascade(username)
+	hash, err := hashPassword(req.Password)
 	if err != nil {
-		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
-		return
-	}
-	if !found {
-		jsonError(w, "Usuario no encontrado", http.StatusNotFound)
+		jsonError(w, "Error interno", http.StatusInternalServerError)
 		return
 	}
 
-	for _, name := range fileNames {
-		deleteTorrentFile(name)
-	}
-
-	// cierra todas las sesiones activas de este usuario (incluida la actual)
-	sessionsMutex.Lock()
-	for token, s := range sessions {
-		if strings.EqualFold(s.Username, username) {
-			delete(sessions, token)
+	if err := dbCreateUser(req.Username, hash, "creado por admin"); err != nil {
+		if isUniqueViolation(err) {
+			jsonError(w, "El usuario ya existe", http.StatusConflict)
+			return
 		}
+		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
+		return
 	}
-	sessionsMutex.Unlock()
-
-	http.SetCookie(w, &http.Cookie{Name: "session_token", Value: "", Path: "/", MaxAge: -1})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "deleted_torrents": fmt.Sprintf("%d", len(fileNames))})
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// adminDeleteUserHandler permite a un administrador borrar una cuenta y
-// todos sus torrents (de la base de datos y del disco), sin necesidad de
-// conocer su contraseña.
+// deleteTorrentFile borra el .torrent del disco de forma segura.
+func deleteTorrentFile(fileName string) {
+	safeName := strings.ReplaceAll(fileName, "/", "_")
+	os.Remove(TorrentsDir + "/" + safeName)
+}
+
+// adminDeleteUserHandler borra una cuenta y todos sus torrents (BD + disco).
 func adminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
@@ -768,11 +726,93 @@ func adminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "deleted_torrents": fmt.Sprintf("%d", len(fileNames))})
 }
 
+// =========================================================
+// PANEL DE ADMINISTRACIÓN — INVITACIONES
+// =========================================================
+
+type InviteView struct {
+	Code      string `json:"code"`
+	CreatedAt string `json:"created_at"`
+	UsedBy    string `json:"used_by"`
+	UsedAt    string `json:"used_at"`
+	Revoked   bool   `json:"revoked"`
+}
+
+func adminListInvitesHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	out, err := dbListInvites()
+	if err != nil {
+		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
+		return
+	}
+	if out == nil {
+		out = []InviteView{}
+	}
+	json.NewEncoder(w).Encode(out)
+}
+
+func adminCreateInviteHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		jsonError(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	code := generateInviteCode()
+	if err := dbCreateInvite(code); err != nil {
+		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "code": code})
+}
+
+func adminRevokeInviteHandler(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		jsonError(w, "Método no permitido", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "JSON inválido", http.StatusBadRequest)
+		return
+	}
+
+	found, err := dbRevokeInvite(req.Code)
+	if err != nil {
+		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		jsonError(w, "Invitación no encontrada o ya utilizada", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// =========================================================
+// PANEL DE ADMINISTRACIÓN — TORRENTS
+// =========================================================
+
 type AdminTorrentView struct {
 	TorrentMetadata
-	Seeders     int `json:"seeders"`
-	Leechers    int `json:"leechers"`
-	ReportCount int `json:"report_count"`
+	Seeders  int `json:"seeders"`
+	Leechers int `json:"leechers"`
 }
 
 func adminTorrentsHandler(w http.ResponseWriter, r *http.Request) {
@@ -781,13 +821,7 @@ func adminTorrentsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 
-	snapshot, err := dbListTorrents("", "recent")
-	if err != nil {
-		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
-		return
-	}
-
-	counts, err := dbReportCountsByHash()
+	snapshot, err := dbListTorrents("")
 	if err != nil {
 		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
 		return
@@ -796,15 +830,8 @@ func adminTorrentsHandler(w http.ResponseWriter, r *http.Request) {
 	out := make([]AdminTorrentView, 0, len(snapshot))
 	for _, t := range snapshot {
 		seeders, leechers := seedersLeechersFor(t.InfoHash)
-		out = append(out, AdminTorrentView{t, seeders, leechers, counts[t.InfoHash]})
+		out = append(out, AdminTorrentView{t, seeders, leechers})
 	}
-
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].ReportCount != out[j].ReportCount {
-			return out[i].ReportCount > out[j].ReportCount
-		}
-		return out[i].Uploaded.After(out[j].Uploaded)
-	})
 
 	json.NewEncoder(w).Encode(out)
 }
@@ -850,7 +877,7 @@ func adminOverviewHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 
-	totalUsers, bannedUsers, err := dbCountUsers()
+	totalUsers, err := dbCountUsers()
 	if err != nil {
 		jsonError(w, "Error de base de datos", http.StatusInternalServerError)
 		return
@@ -874,7 +901,6 @@ func adminOverviewHandler(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"total_users":     totalUsers,
-		"banned_users":    bannedUsers,
 		"total_torrents":  totalTorrents,
 		"total_downloads": totalDownloads,
 		"total_size":      totalSize,
